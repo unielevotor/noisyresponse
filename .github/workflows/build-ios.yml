@@ -3,10 +3,6 @@ name: Build iOS IPA
 on:
   workflow_dispatch: {}
 
-defaults:
-  run:
-    working-directory: iOS版
-
 jobs:
   build:
     runs-on: macos-latest
@@ -18,29 +14,43 @@ jobs:
         run: brew install xcodegen
 
       - name: Generate Xcode project
-        run: xcodegen generate
+        run: cd iOS版 && xcodegen generate
 
       - name: Build unsigned app
         run: |
           set -o pipefail
-          xcodebuild -project NoiseAlert.xcodeproj \
+          cd iOS版
+          xcodebuild \
+            -project NoiseAlert.xcodeproj \
             -scheme NoiseAlert \
             -configuration Release \
             -sdk iphoneos \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
-            build | tail -n 20
+            build 2>&1 | tail -n 30
 
       - name: Package IPA
         run: |
+          set -e
+          cd iOS版
+          APP="build/Build/Products/Release-iphoneos/NoiseAlert.app"
+          if [ ! -d "$APP" ]; then
+            echo "ERROR: .app 未找到 -> $APP"
+            echo "---- build 目录结构 ----"
+            find build -name "*.app" -maxdepth 8 2>/dev/null | head -n 20 || true
+            exit 1
+          fi
+          rm -rf Payload
           mkdir -p Payload
-          cp -R build/Build/Products/Release-iphoneos/NoiseAlert.app Payload/
-          cd Payload && zip -r ../NoiseAlert.ipa NoiseAlert.app && cd ..
-          ls -lh NoiseAlert.ipa
+          cp -R "$APP" Payload/
+          cd Payload && zip -r "$GITHUB_WORKSPACE/NoiseAlert.ipa" NoiseAlert.app && cd ..
+          echo "IPA 已生成:"
+          ls -lh "$GITHUB_WORKSPACE/NoiseAlert.ipa"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: NoiseAlert-ipa
-          path: iOS版/NoiseAlert.ipa
+          path: NoiseAlert.ipa
+          if-no-files-found: error
