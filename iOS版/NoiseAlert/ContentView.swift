@@ -41,7 +41,7 @@ struct ContentView: View {
                     Button(detector.isRunning ? "停止" : "开始监听") {
                         toggle()
                     }
-                    .fontWeight(.semibold)
+                    .font(.body.weight(.semibold))
                 }
             }
         }
