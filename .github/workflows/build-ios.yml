@@ -43,4 +43,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: NoiseAlert-ipa
-          path: NoiseAlert.ipa
+          path: iOS版/NoiseAlert.ipa
