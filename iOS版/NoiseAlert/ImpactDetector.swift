@@ -317,37 +317,43 @@ final class ImpactDetector: ObservableObject {
 
         var realp = [Float](repeating: 0, count: fftSize / 2)
         var imagp = [Float](repeating: 0, count: fftSize / 2)
-        var split = DSPSplitComplex(realp: &realp, imagp: &imagp)
+        return realp.withUnsafeMutableBufferPointer { realpBuf in
+            imagp.withUnsafeMutableBufferPointer { imagpBuf in
+                // 用缓冲区指针构造，保证指针在 DSPSplitComplex 生命周期内有效
+                var split = DSPSplitComplex(realp: realpBuf.baseAddress!,
+                                            imagp: imagpBuf.baseAddress!)
 
-        input.withUnsafeMutableBufferPointer { buf in
-            buf.baseAddress?.withMemoryRebound(to: DSPComplex.self,
-                                               capacity: fftSize / 2) { cpx in
-                vDSP_ctoz(cpx, 2, &split, 1, vDSP_Length(fftSize / 2))
+                input.withUnsafeMutableBufferPointer { buf in
+                    buf.baseAddress?.withMemoryRebound(to: DSPComplex.self,
+                                                       capacity: fftSize / 2) { cpx in
+                        vDSP_ctoz(cpx, 2, &split, 1, vDSP_Length(fftSize / 2))
+                    }
+                }
+                vDSP_fft_zrip(setup, &split, 1, 12, FFTDirection(FFT_FORWARD))
+
+                let freqStep = sampleRate / Float(fftSize)
+                let lowStart = Int(ceil(45 / freqStep))
+                let lowEnd = Int(floor(200 / freqStep))
+                let midStart = Int(ceil(300 / freqStep))
+                let midEnd = Int(floor(2000 / freqStep))
+                let limit = fftSize / 2 - 1
+
+                func energy(_ a: Int, _ b: Int) -> Float {
+                    guard a <= b, b <= limit else { return 0 }
+                    var s: Float = 0
+                    for k in a...b {
+                        let r = realpBuf[k]
+                        let im = imagpBuf[k]
+                        s += r * r + im * im
+                    }
+                    return sqrt(s / Float(b - a + 1))
+                }
+
+                let low = 20 * log10(energy(lowStart, lowEnd) + 1e-15)
+                let mid = 20 * log10(energy(midStart, midEnd) + 1e-15)
+                return (low, mid)
             }
         }
-        vDSP_fft_zrip(setup, &split, 1, 12, FFTDirection(FFT_FORWARD))
-
-        let freqStep = sampleRate / Float(fftSize)
-        let lowStart = Int(ceil(45 / freqStep))
-        let lowEnd = Int(floor(200 / freqStep))
-        let midStart = Int(ceil(300 / freqStep))
-        let midEnd = Int(floor(2000 / freqStep))
-        let limit = fftSize / 2 - 1
-
-        func energy(_ a: Int, _ b: Int) -> Float {
-            guard a <= b, b <= limit else { return 0 }
-            var s: Float = 0
-            for k in a...b {
-                let r = realp[k]
-                let im = imagp[k]
-                s += r * r + im * im
-            }
-            return sqrt(s / Float(b - a + 1))
-        }
-
-        let low = 20 * log10(energy(lowStart, lowEnd) + 1e-15)
-        let mid = 20 * log10(energy(midStart, midEnd) + 1e-15)
-        return (low, mid)
     }
 
     // MARK: 提示音播放
