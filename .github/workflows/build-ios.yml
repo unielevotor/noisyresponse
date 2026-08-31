@@ -33,7 +33,7 @@ jobs:
       - name: Package IPA
         run: |
           set -e
-          cd iOS版
+          cd "$GITHUB_WORKSPACE/iOS版"
           APP="build/Build/Products/Release-iphoneos/NoiseAlert.app"
           if [ ! -d "$APP" ]; then
             echo "ERROR: .app 未找到 -> $APP"
@@ -44,8 +44,10 @@ jobs:
           rm -rf Payload
           mkdir -p Payload
           cp -R "$APP" Payload/
-          cd Payload && zip -r "$GITHUB_WORKSPACE/NoiseAlert.ipa" NoiseAlert.app && cd ..
-          echo "IPA 已生成:"
+          # 关键：压缩时顶层必须是 Payload/，否则 Sideloadly 无法解包
+          zip -r "$GITHUB_WORKSPACE/NoiseAlert.ipa" Payload
+          echo "== IPA 顶层结构（必须包含 Payload/）=="
+          unzip -l "$GITHUB_WORKSPACE/NoiseAlert.ipa" | head -n 8
           ls -lh "$GITHUB_WORKSPACE/NoiseAlert.ipa"
 
       - name: Upload artifact
