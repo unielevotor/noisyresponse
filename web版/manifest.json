@@ -1,0 +1,16 @@
+{
+  "name": "噪音提示",
+  "short_name": "噪音提示",
+  "description": "用麦克风检测脚步、敲击等低频冲击声，自动播放提示音",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#101418",
+  "theme_color": "#101418",
+  "icons": [
+    {
+      "src": "icon.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    }
+  ]
+}

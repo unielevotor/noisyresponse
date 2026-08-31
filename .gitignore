@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+config.json
+alert.wav
+.DS_Store
+Thumbs.db
+*.tsbuildinfo

@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="manifest" href="manifest.json">
+<title>噪音提示</title>
+<style>
+  :root {
+    --bg: #101418; --card: #1b2229; --card2: #232c35; --line: #2b3641;
+    --text: #e6edf3; --sub: #8b98a5; --accent: #3a86ff;
+    --track: #10171e;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    padding: 16px 16px max(16px, env(safe-area-inset-bottom));
+    max-width: 600px; margin: 0 auto;
+  }
+  h1 { font-size: 20px; margin: 4px 0 12px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; }
+  .card h2 { font-size: 13px; color: var(--sub); margin: 0 0 10px; font-weight: 600; }
+  .row { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
+  .row .lbl { color: var(--text); white-space: nowrap; }
+  .row .val { color: var(--sub); font-variant-numeric: tabular-nums; white-space: nowrap; margin-left: auto; }
+  .grow { flex: 1; min-width: 0; }
+  .hint { color: var(--sub); font-size: 12px; line-height: 1.5; margin: 2px 0 0; }
+  select {
+    width: 100%; padding: 8px; border-radius: 8px; background: var(--card2);
+    color: var(--text); border: 1px solid var(--line); font-size: 14px;
+  }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .range-wrap { display: flex; align-items: center; gap: 10px; }
+  .range-wrap .end { color: var(--sub); font-size: 12px; white-space: nowrap; }
+  .range-wrap .val { margin-left: auto; }
+  .btn-row { display: flex; gap: 12px; margin: 4px 0 12px; }
+  .btn {
+    flex: 1; border: 1px solid var(--line); border-radius: 12px; padding: 13px;
+    font-size: 16px; font-weight: 600; background: var(--card2); color: var(--text);
+  }
+  .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .btn.stop { background: var(--card2); color: var(--text); }
+  table.meter { width: 100%; border-collapse: collapse; }
+  table.meter td { padding: 5px 0; vertical-align: middle; }
+  table.meter .k { width: 76px; color: var(--sub); font-size: 13px; }
+  table.meter .track { height: 8px; background: var(--track); border-radius: 5px; overflow: hidden; }
+  table.meter .bar { height: 100%; width: 0%; background: var(--accent); border-radius: 5px; transition: width .12s linear; }
+  table.meter .v { width: 54px; text-align: right; color: var(--sub); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .accum { font-variant-numeric: tabular-nums; }
+  .footer { display: flex; gap: 24px; color: var(--sub); font-size: 13px; margin-top: 6px; }
+  .log { font-size: 12px; color: var(--sub); line-height: 1.7; max-height: 180px; overflow-y: auto; }
+  details { margin-top: 6px; }
+  summary { cursor: pointer; color: var(--sub); font-size: 13px; }
+  details .row { margin: 8px 0; }
+  .file-name { color: var(--text); font-size: 14px; }
+</style>
+</head>
+<body>
+<h1>噪音提示 <span style="color:var(--sub);font-size:13px">网页版</span></h1>
+
+<div class="card">
+  <h2>设备设置</h2>
+  <div class="row">
+    <span class="lbl">输入设备（麦克风）：</span>
+    <select id="inDevice" class="grow"><option value="">系统默认</option></select>
+    <button class="btn" style="flex:none;padding:8px 12px" id="refreshDev">刷新设备</button>
+  </div>
+  <div class="row">
+    <span class="lbl">输出设备（音箱）：</span>
+    <select id="outDevice" class="grow"><option value="">系统默认</option></select>
+  </div>
+  <p class="hint" id="devHint">输入设备切换后会自动重启监听生效。输出方向由系统控制（连蓝牙音箱后自动走音箱）。</p>
+</div>
+
+<div class="card">
+  <h2>报警音频</h2>
+  <div class="row">
+    <div class="grow">
+      <div class="file-name" id="audioName">未选择（使用内置音）</div>
+    </div>
+    <button class="btn" style="flex:none;padding:8px 14px" id="pickFile">选择文件</button>
+  </div>
+  <input type="file" id="audioFile" accept="audio/*" hidden>
+  <div class="row">
+    <span class="lbl">内置提示音：</span>
+    <select id="tone" class="grow">
+      <option value="dingdong">叮咚</option>
+      <option value="beep">蜂鸣</option>
+      <option value="click">短促滴</option>
+      <option value="chime">钟琴</option>
+    </select>
+  </div>
+  <p class="hint">支持 mp3 / wav / m4a。选择了文件后优先播放你选的音频。</p>
+</div>
+
+<div class="card">
+  <h2>参数调节</h2>
+  <div class="row"><span class="lbl">灵敏度</span></div>
+  <div class="range-wrap">
+    <span class="end">高</span>
+    <input type="range" id="sensitivity" min="4" max="20" step="1" value="8">
+    <span class="end">低</span>
+    <span class="val" id="sensVal">8</span>
+  </div>
+  <div class="range-wrap">
+    <span class="end">确认次数</span>
+    <input type="range" id="confirmCount" min="1" max="10" step="1" value="3">
+    <span class="val" id="confirmVal">3次</span>
+  </div>
+  <div class="range-wrap">
+    <span class="end">时间窗口</span>
+    <input type="range" id="windowSec" min="1" max="10" step="1" value="4">
+    <span class="val" id="windowVal">4秒</span>
+  </div>
+  <div class="range-wrap">
+    <span class="end">冷却时间</span>
+    <input type="range" id="cooldown" min="0.5" max="30" step="0.5" value="2">
+    <span class="val" id="cdVal">2秒</span>
+  </div>
+  <div class="range-wrap">
+    <span class="end">检测模式</span>
+    <select id="mode" style="flex:1">
+      <option value="impact">低音冲击（脚步/敲击）</option>
+      <option value="rms">普通音量</option>
+    </select>
+  </div>
+  <details>
+    <summary>高级参数（麦克风增益）</summary>
+    <div class="range-wrap"><span class="end">麦克风增益</span><input type="range" id="gain" min="-30" max="30" step="1" value="0"><span class="val" id="gainVal">0dB</span></div>
+  </details>
+</div>
+
+<div class="btn-row">
+  <button class="btn primary" id="startBtn">▶ 开始监听</button>
+  <button class="btn stop" id="stopBtn">■ 停止</button>
+</div>
+
+<div class="card">
+  <h2>运行状态</h2>
+  <div id="stateIdle" style="color:var(--sub);font-size:13px">未运行</div>
+  <div id="stateRun" style="display:none">
+    <table class="meter">
+      <tr><td class="k">低频能量</td><td class="track"><div class="bar" id="barLow"></div></td><td class="v" id="valLow">--</td></tr>
+      <tr><td class="k">尖锐度</td><td class="track"><div class="bar" id="barSharp"></div></td><td class="v" id="valSharp">--</td></tr>
+      <tr><td class="k">冲击累积</td><td class="track"><div class="bar" id="barAccum"></div></td><td class="v accum" id="valAccum">0/3</td></tr>
+      <tr><td class="k">低频占比</td><td class="track"><div class="bar" id="barRatio"></div></td><td class="v" id="valRatio">--</td></tr>
+      <tr><td class="k">综合评分</td><td class="track"><div class="bar" id="barScore"></div></td><td class="v" id="valScore">--</td></tr>
+    </table>
+    <div class="footer">
+      <span>触发次数：<b id="fireCount">0</b></span>
+      <span>运行时长：<span id="runTime">00:00:00</span></span>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>日志</h2>
+  <div class="log" id="logBox">暂无记录，点击“开始监听”。</div>
+</div>
+
+<p class="hint">
+  麦克风尽量贴近地面——脚步的“咚咚”主要是地板振动。<br>
+  iOS 网页限制：锁屏或切换应用会暂停监听，建议保持屏幕常亮。
+</p>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+
+const tones = {
+  dingdong: { parts: [[880, 0, 0.15], [1174.66, 0.18, 0.28]], total: 0.55 },
+  beep:     { parts: [[1000, 0, 0.35]], total: 0.45 },
+  click:    { parts: [[1500, 0, 0.08]], total: 0.18 },
+  chime:    { parts: [[660, 0, 0.18], [990, 0.20, 0.35]], total: 0.62 }
+};
+
+const state = {
+  mode: 'impact', sensitivityDb: 8, confirmCount: 3, windowSec: 4,
+  cooldownSec: 2, gainDb: 0, tone: 'dingdong',
+  toneDurationSec: 0.55, inputDeviceId: ''
+};
+
+let ctx = null, worklet = null, stream = null, srcNode = null, running = false, busy = false;
+let wakeLock = null, fireCount = 0, startTime = 0, uiTimer = 0;
+let customAudioData = null, customAudioBuffer = null;
+let lastStatus = {};
+
+// iOS 网页端无法指定麦克风，给出明确提示
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+if (isIOS) {
+  $('devHint').innerHTML = 'iPhone 由 iOS 决定使用哪个麦克风，网页无法指定或切换——即使列表有外接麦克风也不会生效。要让外接麦克风生效：用系统可识别的蓝牙麦克风(Hands-Free)或标准 USB 声卡转接，并在 iOS 中设为输入；否则请用电脑端版本并明确选择输入设备。输出方向同样由系统控制。';
+}
+
+// ---------- 参数同步到 worklet ----------
+function pushParams() {
+  if (!worklet) return;
+  state.toneDurationSec = customAudioBuffer
+    ? customAudioBuffer.duration
+    : tones[state.tone].total;
+  worklet.port.postMessage({
+    params: {
+      mode: state.mode, sensitivityDb: state.sensitivityDb,
+      thresholdDb: -35, cooldownSec: state.cooldownSec,
+      confirmCount: state.confirmCount, windowSec: state.windowSec,
+      gainDb: state.gainDb,
+      toneDurationSec: state.toneDurationSec
+    }
+  });
+}
+
+// ---------- 设备 ----------
+async function refreshDevices() {
+  try {
+    const devs = await navigator.mediaDevices.enumerateDevices();
+    const fill = (sel, kind, current) => {
+      const list = devs.filter(d => d.kind === kind && d.deviceId);
+      sel.innerHTML = '<option value="">系统默认</option>' +
+        list.map(d => `<option value="${d.deviceId}">${d.label || '设备 ' + d.deviceId.slice(0, 5)}</option>`).join('');
+      if (current) sel.value = list.some(d => d.deviceId === current) ? current : '';
+    };
+    fill($('inDevice'), 'audioinput', state.inputDeviceId);
+    fill($('outDevice'), 'audiooutput', '');
+  } catch (e) { /* 权限未授予时标签为空，忽略 */ }
+}
+
+// ---------- 提示音播放 ----------
+function playTone() {
+  if (!ctx) return;
+  let buffer, dur;
+  if (customAudioBuffer) {
+    buffer = customAudioBuffer; dur = buffer.duration;
+  } else {
+    const t = tones[state.tone];
+    dur = t.total;
+    const sr = ctx.sampleRate;
+    buffer = ctx.createBuffer(1, Math.ceil(dur * sr), sr);
+    const d = buffer.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      const time = i / sr; let s = 0;
+      for (const [freq, start, dd] of t.parts) {
+        const t0 = time - start;
+        if (t0 >= 0 && t0 < dd) {
+          const a = Math.min(1, t0 / 0.008);
+          s += 0.35 * Math.sin(2 * Math.PI * freq * t0) * a * Math.exp(-t0 / 0.10);
+        }
+      }
+      d[i] = s;
+    }
+  }
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(ctx.destination);
+  src.start();
+}
+
+// ---------- 屏幕唤醒 ----------
+async function requestWakeLock() {
+  try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+  pushParams();
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') requestWakeLock();
+});
+
+// ---------- 日志 / 状态 ----------
+function logLine(text) {
+  const box = $('logBox');
+  if (box.textContent === '暂无记录，点击“开始监听”。') box.textContent = '';
+  const ts = new Date().toTimeString().slice(0, 8);
+  box.textContent = `[${ts}] ${text}\n` + box.textContent;
+}
+
+const pct = (v) => (clamp01(v) * 100).toFixed(0) + '%';
+
+function updateStatus(d) {
+  lastStatus = d;
+  const setBar = (barId, valId, frac, text) => {
+    $(barId).style.width = (clamp01(frac) * 100).toFixed(1) + '%';
+    $(valId).textContent = text;
+  };
+  setBar('barLow', 'valLow', (d.lowDb + 60) / 60, d.lowDb.toFixed(0) + ' dB');
+  setBar('barSharp', 'valSharp', d.sharp, pct(d.sharp));
+  setBar('barRatio', 'valRatio', d.lowRatio, pct(d.lowRatio));
+  setBar('barScore', 'valScore', d.score, pct(d.score));
+  const n = Math.min(d.confirmCount, Math.max(0, d.impactCount));
+  $('barAccum').style.width = (d.confirmCount ? n / d.confirmCount * 100 : 0).toFixed(1) + '%';
+  $('valAccum').textContent = n + '/' + d.confirmCount;
+}
+
+function startRunTimer() {
+  startTime = performance.now();
+  clearInterval(uiTimer);
+  uiTimer = setInterval(() => {
+    const s = Math.floor((performance.now() - startTime) / 1000);
+    const hh = String(Math.floor(s / 3600)).padStart(2, '0');
+    const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+    const ss = String(s % 60).padStart(2, '0');
+    $('runTime').textContent = hh + ':' + mm + ':' + ss;
+  }, 1000);
+}
+
+// ---------- 音频图管理（ctx 与 worklet 常驻，重启只换麦克风，避免双管道） ----------
+async function ensureGraph() {
+  if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+  if (ctx.state === 'suspended') await ctx.resume().catch(() => {});
+  if (!worklet) {
+    await ctx.audioWorklet.addModule('processor.js');
+    worklet = new AudioWorkletNode(ctx, 'impact-processor', { numberOfInputs: 1, numberOfOutputs: 0 });
+    worklet.port.onmessage = (e) => {
+      const d = e.data;
+      if (d.type === 'status') {
+        updateStatus(d);
+      } else if (d.type === 'trigger') {
+        handleTrigger(d);
+      }
+    };
+  }
+  if (customAudioData) {
+    try { customAudioBuffer = await ctx.decodeAudioData(customAudioData.slice(0)); }
+    catch (e) { logLine('音频解码失败：' + e.message); customAudioBuffer = null; }
+  }
+}
+
+async function acquireStream() {
+  const audio = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+  if (state.inputDeviceId) audio.deviceId = { ideal: state.inputDeviceId };
+  return await navigator.mediaDevices.getUserMedia({ audio });
+}
+
+function attachInput(newStream) {
+  if (srcNode) { try { srcNode.disconnect(); } catch (e) {} }
+  if (stream) { stream.getTracks().forEach(t => t.stop()); }
+  stream = newStream;
+  srcNode = ctx.createMediaStreamSource(stream);
+  srcNode.connect(worklet);
+}
+
+function handleTrigger(d) {
+  fireCount++;
+  $('fireCount').textContent = fireCount;
+  logLine(`确认到 ${d.count} 次${d.mode === 'impact' ? '低频冲击' : '噪音'}（${d.db.toFixed(0)} dB）→ 播放报警音`);
+  playTone();
+  updateStatus(Object.assign({}, lastStatus, { impactCount: 0 }));
+}
+
+async function start() {
+  if (running || busy) return;
+  busy = true;
+  try {
+    await ensureGraph();
+    let newStream;
+    try { newStream = await acquireStream(); }
+    catch (e) {
+      logLine('无法访问麦克风：' + (e.name === 'NotAllowedError'
+        ? '请在 Safari 设置中允许麦克风权限' : e.message));
+      return;
+    }
+    attachInput(newStream);
+    worklet.port.postMessage({ reset: true });   // 清空旧检测状态，避免立刻误触发
+    await ctx.resume();
+    pushParams();
+    running = true;
+    $('stateIdle').style.display = 'none';
+    $('stateRun').style.display = '';
+    fireCount = 0; $('fireCount').textContent = '0';
+    logLine('开始监听（' + (state.mode === 'impact' ? '低音冲击' : '普通音量') + '，确认 ' + state.confirmCount + '次/' + state.windowSec + '秒）');
+    startRunTimer();
+    requestWakeLock();
+    refreshDevices();
+  } finally {
+    busy = false;
+  }
+}
+
+async function stop() {
+  if (busy || !running) return;
+  busy = true;
+  try {
+    await ctx.suspend().catch(() => {});
+    if (srcNode) { try { srcNode.disconnect(); } catch (e) {} srcNode = null; }
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+    clearInterval(uiTimer);
+    running = false;
+    $('stateIdle').style.display = '';
+    $('stateRun').style.display = 'none';
+    logLine('已停止监听');
+  } finally {
+    busy = false;
+  }
+}
+
+$('startBtn').addEventListener('click', start);
+$('stopBtn').addEventListener('click', stop);
+
+// ---------- 控件绑定 ----------
+function bind(id, key, val) {
+  const el = $(id);
+  el.addEventListener('input', () => {
+    state[key] = parseFloat(el.value);
+    if (val) val();
+    pushParams();
+  });
+}
+bind('sensitivity', 'sensitivityDb', () => $('sensVal').textContent = state.sensitivityDb);
+bind('confirmCount', 'confirmCount', () => $('confirmVal').textContent = state.confirmCount + '次');
+bind('windowSec', 'windowSec', () => $('windowVal').textContent = state.windowSec + '秒');
+bind('cooldown', 'cooldownSec', () => $('cdVal').textContent = state.cooldownSec + '秒');
+bind('gain', 'gainDb', () => $('gainVal').textContent = state.gainDb + 'dB');
+
+$('mode').addEventListener('change', (e) => { state.mode = e.target.value; pushParams(); });
+$('tone').addEventListener('change', (e) => { state.tone = e.target.value; pushParams(); });
+
+$('refreshDev').addEventListener('click', refreshDevices);
+$('inDevice').addEventListener('change', async (e) => {
+  state.inputDeviceId = e.target.value;
+  if (running) { await stop(); await start(); }
+});
+
+$('pickFile').addEventListener('click', () => $('audioFile').click());
+$('audioFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    customAudioData = await file.arrayBuffer();
+    customAudioBuffer = null;
+    $('audioName').textContent = file.name;
+    logLine('已选择报警音频：' + file.name);
+  } catch (err) {
+    logLine('读取音频文件失败：' + err.message);
+  }
+});
+
+refreshDevices();
+</script>
+</body>
+</html>

@@ -1,0 +1,38 @@
+name: NoiseAlert
+
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+targets:
+  NoiseAlert:
+    type: application
+    platform: iOS
+    sources:
+      - NoiseAlert
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.NoiseAlert
+        PRODUCT_NAME: NoiseAlert
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: NoiseAlert/Info.plist
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1"
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ENABLE_PREVIEWS: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+
+schemes:
+  NoiseAlert:
+    build:
+      targets:
+        NoiseAlert: all
+    run:
+      config: Debug
+    archive:
+      config: Release
