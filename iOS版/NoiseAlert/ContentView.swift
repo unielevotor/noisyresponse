@@ -14,6 +14,7 @@ struct ContentView: View {
     @AppStorage("cooldown") private var cooldown = 2.0
     @AppStorage("gain") private var gain = 0.0
     @AppStorage("tone") private var toneRaw = ToneType.dingdong.rawValue
+    @AppStorage("outputRoute") private var outputRouteRaw = OutputRoute.system.rawValue
 
     @State private var logLines: [String] = []
     @State private var showError = false
@@ -53,7 +54,11 @@ struct ContentView: View {
                 }
             }
         }
-        .onAppear { syncParams(); refreshInputs() }
+        .onAppear {
+            syncParams()
+            refreshInputs()
+            detector.setOutputRoute(OutputRoute(rawValue: outputRouteRaw) ?? .system)
+        }
         .onChange(of: modeRaw) { _ in syncParams() }
         .onChange(of: sensitivity) { _ in syncParams() }
         .onChange(of: threshold) { _ in syncParams() }
@@ -105,13 +110,25 @@ struct ContentView: View {
                 .pickerStyle(.menu)
                 Button("刷新") { refreshInputs() }
             }
-            Text("iPhone 由系统决定输入路由，通常只有内置麦克风；需外接麦请连蓝牙耳机或标准 USB 声卡。")
+
+            HStack {
+                Picker("输出设备（音箱）", selection: $outputRouteRaw) {
+                    ForEach(OutputRoute.allCases) { r in
+                        Text(r.label).tag(r.rawValue)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+            Text("输入与输出独立控制：切换输入设备不会影响你选的输出。iPhone 由系统决定输入路由，通常只有内置麦克风；需外接麦请连蓝牙耳机或标准 USB 声卡。蓝牙 Hands-Free 麦克风会顺带占用输出，建议用 USB/直插接收器做输入、蓝牙音箱做输出。")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding()
         .background(cardBackground)
         .onChange(of: selectedInputUID) { uid in
             detector.setPreferredInput(uid: uid.isEmpty ? nil : uid)
+        }
+        .onChange(of: outputRouteRaw) { _ in
+            detector.setOutputRoute(OutputRoute(rawValue: outputRouteRaw) ?? .system)
         }
     }
 

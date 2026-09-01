@@ -54,6 +54,24 @@ struct InputDeviceInfo: Identifiable {
     let name: String
 }
 
+// MARK: - 输出路由（音箱）
+
+enum OutputRoute: String, CaseIterable, Identifiable {
+    case system
+    case speaker
+    case bluetooth
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .system: return "系统默认"
+        case .speaker: return "内建扬声器"
+        case .bluetooth: return "蓝牙音箱"
+        }
+    }
+}
+
 // MARK: - 检测参数
 
 struct DetectorParams {
@@ -110,6 +128,7 @@ final class ImpactDetector: ObservableObject {
     private var customAudioPlayer: AVAudioPlayer?
     private var playerAttached = false
     private var tapInstalled = false
+    private var outputRoute: OutputRoute = .system
 
     // 生命周期与运行状态（主线程写，processQueue 读）
     private var isMonitoring = false
@@ -151,6 +170,7 @@ final class ImpactDetector: ObservableObject {
             options: [.defaultToSpeaker, .allowBluetoothHFP, .allowBluetoothA2DP]
         )
         try session.setActive(true)
+        applyOutputRoute(outputRoute)
 
         let inputFormat = engine.inputNode.inputFormat(forBus: 0)
         toneBuffer = Self.makeTone(tone, sampleRate: inputFormat.sampleRate)
@@ -542,6 +562,28 @@ final class ImpactDetector: ObservableObject {
         let target = uid.flatMap { id in inputs.first { $0.uid == id } }
         try? session.setPreferredInput(target)
         try? session.setActive(true)
+        // 切换输入后重新应用输出，避免输出被顺带切换
+        applyOutputRoute(outputRoute)
+    }
+
+    // MARK: 输出路由控制
+
+    func setOutputRoute(_ route: OutputRoute) {
+        outputRoute = route
+        applyOutputRoute(route)
+    }
+
+    private func applyOutputRoute(_ route: OutputRoute) {
+        let session = AVAudioSession.sharedInstance()
+        try? session.setActive(true)
+        switch route {
+        case .system, .bluetooth:
+            // 交给系统选择（若已连接蓝牙音箱且允许 A2DP，会优先走音箱）
+            try? session.overrideOutputAudioPort(.none)
+        case .speaker:
+            // 强制使用内建扬声器（避免被接收器/蓝牙抢走输出）
+            try? session.overrideOutputAudioPort(.speaker)
+        }
     }
 
     private func clamp01(_ v: Float) -> Float { max(0, min(1, v)) }
