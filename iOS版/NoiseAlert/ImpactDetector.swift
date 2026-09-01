@@ -50,7 +50,7 @@ enum ToneType: String, CaseIterable, Identifiable {
 // MARK: - 输入设备信息
 
 struct InputDeviceInfo: Identifiable {
-    let id: String   // uid
+    let id: String
     let name: String
 }
 
@@ -58,16 +58,15 @@ struct InputDeviceInfo: Identifiable {
 
 struct DetectorParams {
     var mode: DetectionMode = .impact
-    var sensitivityDb: Float = 8      // 低音冲击：低音高出背景多少 dB
-    var thresholdDb: Float = -35      // 普通音量：整体音量阈值
-    var confirmCount: Int = 3         // 确认次数 N
-    var windowSec: Float = 4          // 时间窗口 T
-    var cooldownSec: Float = 2        // 播放后冷却
-    var gainDb: Float = 0             // 麦克风增益
-    var toneDurationSec: Float = 0.55 // 提示音时长，用于播放期间忽略麦克风
+    var sensitivityDb: Float = 8
+    var thresholdDb: Float = -35
+    var confirmCount: Int = 3
+    var windowSec: Float = 4
+    var cooldownSec: Float = 2
+    var gainDb: Float = 0
+    var toneDurationSec: Float = 0.55
 }
 
-/// 供检测线程与主线程安全共享的实时参数
 final class ParamsBox {
     private let lock = NSLock()
     private var value: DetectorParams
@@ -109,14 +108,19 @@ final class ImpactDetector: ObservableObject {
     private var fftSetup: FFTSetup?
     private var toneBuffer: AVAudioPCMBuffer?
     private var customAudioPlayer: AVAudioPlayer?
-    private var interruptionObserver: NSObjectProtocol?
-    private var playbackConfigured = false
+    private var playerAttached = false
+    private var tapInstalled = false
 
-    // 判定与防抖常量（与 web 版一致）
-    private let domMargin: Float = 4     // 低频需比中频强这么多 dB（说话声中频更强）
-    private let hiMargin: Float = 0      // 低频需不低于高频
-    private let peakDrop: Float = 6      // 从事件峰值回落多少 dB 才算结束
-    private let eventGap: Float = 0.15   // 两次计数最小间隔（秒）
+    // 生命周期与运行状态（主线程写，processQueue 读）
+    private var isMonitoring = false
+    private var activeParams: ParamsBox?
+    private var onTrigger: ((String, Float, Int) -> Void)?
+
+    // 判定与防抖常量
+    private let domMargin: Float = 4
+    private let hiMargin: Float = 0
+    private let peakDrop: Float = 6
+    private let eventGap: Float = 0.15
 
     // 状态机（仅在 processQueue 上读写）
     private var baseline: Float?
@@ -128,6 +132,11 @@ final class ImpactDetector: ObservableObject {
     private var lastFireTime: Double = -1e9
     private var playingUntil: Double = 0
     private var blockCount = 0
+
+    private var interruptionObserver: NSObjectProtocol?
+    private var routeObserver: NSObjectProtocol?
+    private var engineConfigObserver: NSObjectProtocol?
+    private var mediaResetObserver: NSObjectProtocol?
 
     // MARK: 启动 / 停止
 
@@ -144,20 +153,36 @@ final class ImpactDetector: ObservableObject {
         try session.setActive(true)
 
         let inputFormat = engine.inputNode.inputFormat(forBus: 0)
-        let sampleRate = inputFormat.sampleRate
+        toneBuffer = Self.makeTone(tone, sampleRate: inputFormat.sampleRate)
 
-        // 内置提示音（作为未选文件时的回退）
-        toneBuffer = Self.makeTone(tone, sampleRate: sampleRate)
+        activeParams = params
+        self.onTrigger = onTrigger
+        resetState()
+        isMonitoring = true
 
-        if !playbackConfigured {
-            engine.attach(playerNode)
-            let playFormat = AVAudioFormat(standardFormatWithSampleRate: sampleRate,
-                                           channels: 1)!
-            engine.connect(playerNode, to: engine.mainMixerNode, format: playFormat)
-            playbackConfigured = true
+        try ensureTapAndStart()
+        registerObservers()
+        isRunning = true
+    }
+
+    func stop() {
+        isMonitoring = false
+        activeParams = nil
+        onTrigger = nil
+        removeObservers()
+        if tapInstalled {
+            engine.inputNode.removeTap(onBus: 0)
+            tapInstalled = false
         }
+        playerNode.stop()
+        customAudioPlayer?.stop()
+        engine.stop()
+        try? AVAudioSession.sharedInstance().setActive(false,
+            options: [.notifyOthersOnDeactivation])
+        isRunning = false
+    }
 
-        // 启动音频流之前重置状态机
+    private func resetState() {
         baseline = nil
         inEvent = false
         peak = -1e9
@@ -170,20 +195,39 @@ final class ImpactDetector: ObservableObject {
         triggerCount = 0
         lastTriggerText = nil
         impactCount = 0
+    }
 
-        let blockSize: AVAudioFrameCount = 1024
-        engine.inputNode.installTap(onBus: 0, bufferSize: blockSize,
-                                    format: inputFormat) { [weak self] buffer, _ in
-            guard let self else { return }
-            self.processQueue.async {
-                self.process(buffer: buffer, params: params, onTrigger: onTrigger)
-            }
+    // MARK: 音频管道（只安装一次 tap，通过暂停/启动引擎控制）
+
+    private func ensureTapAndStart() throws {
+        let inputNode = engine.inputNode
+        let inputFormat = inputNode.inputFormat(forBus: 0)
+        let playFormat = AVAudioFormat(standardFormatWithSampleRate: inputFormat.sampleRate,
+                                       channels: 1)!
+
+        if !playerAttached {
+            engine.attach(playerNode)
+            playerAttached = true
         }
+        engine.connect(playerNode, to: engine.mainMixerNode, format: playFormat)
+
+        if engine.isRunning { engine.stop() }
+        if tapInstalled { inputNode.removeTap(onBus: 0) }
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
+            guard let self else { return }
+            self.processQueue.async { self.process(buffer: buffer) }
+        }
+        tapInstalled = true
 
         engine.prepare()
         try engine.start()
+    }
 
-        interruptionObserver = NotificationCenter.default.addObserver(
+    // MARK: 通知观察（中断 / 路由 / 引擎配置 / 媒体服务重置）
+
+    private func registerObservers() {
+        let center = NotificationCenter.default
+        interruptionObserver = center.addObserver(
             forName: AVAudioSession.interruptionNotification,
             object: nil, queue: .main
         ) { [weak self] note in
@@ -192,64 +236,58 @@ final class ImpactDetector: ObservableObject {
                   let raw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
                   let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
             switch type {
-            case .began: self.engine.pause()
-            case .ended: try? self.engine.start()
-            default: break
+            case .began:
+                guard self.isMonitoring else { return }
+                self.engine.pause()
+            case .ended:
+                guard self.isMonitoring else { return }
+                try? AVAudioSession.sharedInstance().setActive(true)
+                if !self.engine.isRunning { try? self.ensureTapAndStart() }
+            default:
+                break
             }
         }
 
-        isRunning = true
-    }
-
-    func stop() {
-        if let obs = interruptionObserver {
-            NotificationCenter.default.removeObserver(obs)
-            interruptionObserver = nil
+        routeObserver = center.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.isMonitoring else { return }
+            try? AVAudioSession.sharedInstance().setActive(true)
+            try? self.ensureTapAndStart()
         }
-        engine.inputNode.removeTap(onBus: 0)
-        playerNode.stop()
-        customAudioPlayer?.stop()
-        engine.stop()
-        try? AVAudioSession.sharedInstance().setActive(false)
-        isRunning = false
+
+        engineConfigObserver = center.addObserver(
+            forName: Notification.Name("AVAudioEngineConfigurationChange"),
+            object: engine, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.isMonitoring else { return }
+            try? self.ensureTapAndStart()
+        }
+
+        mediaResetObserver = center.addObserver(
+            forName: Notification.Name("AVAudioSessionMediaServicesWereResetNotification"),
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.engine.stop()
+            self.tapInstalled = false
+            if self.isMonitoring { try? self.ensureTapAndStart() }
+        }
     }
 
-    // MARK: 自选音频
-
-    func setCustomAudio(url: URL) throws {
-        let data = try Data(contentsOf: url)
-        let player = try AVAudioPlayer(data: data)
-        player.prepareToPlay()
-        customAudioPlayer = player
-        customAudioDuration = Float(player.duration)
-        customAudioName = url.lastPathComponent
-    }
-
-    func clearCustomAudio() {
-        customAudioPlayer = nil
-        customAudioDuration = 0
-        customAudioName = nil
-    }
-
-    // MARK: 输入设备
-
-    func inputDevices() -> [InputDeviceInfo] {
-        guard let inputs = AVAudioSession.sharedInstance().availableInputs else { return [] }
-        return inputs.map { InputDeviceInfo(id: $0.uid, name: $0.portName) }
-    }
-
-    func setPreferredInput(uid: String?) {
-        let session = AVAudioSession.sharedInstance()
-        guard let inputs = session.availableInputs else { return }
-        let target = uid.flatMap { id in inputs.first { $0.uid == id } }
-        try? session.setPreferredInput(target)
-        try? session.setActive(true)
+    private func removeObservers() {
+        let center = NotificationCenter.default
+        if let o = interruptionObserver { center.removeObserver(o); interruptionObserver = nil }
+        if let o = routeObserver { center.removeObserver(o); routeObserver = nil }
+        if let o = engineConfigObserver { center.removeObserver(o); engineConfigObserver = nil }
+        if let o = mediaResetObserver { center.removeObserver(o); mediaResetObserver = nil }
     }
 
     // MARK: 处理音频块
 
-    private func process(buffer: AVAudioPCMBuffer, params: ParamsBox,
-                         onTrigger: @escaping (String, Float, Int) -> Void) {
+    private func process(buffer: AVAudioPCMBuffer) {
+        guard isMonitoring, let params = activeParams, let onTrigger = onTrigger else { return }
         guard let data = buffer.floatChannelData?[0] else { return }
         let sr = Float(buffer.format.sampleRate)
         let count = min(Int(buffer.frameLength), 1024)
@@ -268,7 +306,6 @@ final class ImpactDetector: ObservableObject {
         let db = p.mode == .impact ? lowDb + p.gainDb : rmsDb
         blockCount += 1
 
-        // 状态指标
         let totalE = lowE + midE + hiE + 1e-12
         let lowRatio = lowE / totalE
         let sharp = clamp01((hiE / totalE) * 1.4)
@@ -279,7 +316,7 @@ final class ImpactDetector: ObservableObject {
             score = clamp01((db - p.thresholdDb) / 30)
         }
         if blockCount % 5 == 0 {
-            DispQueueMain { [weak self] in
+            DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.levelDb = db
                 self.lowRatio = lowRatio
@@ -290,10 +327,8 @@ final class ImpactDetector: ObservableObject {
             }
         }
 
-        // 提示音播放期间忽略麦克风，避免反馈循环
         if now < playingUntil { return }
 
-        // 固定计数窗口：整组超时则清零，避免来回递减
         if eventCount > 0 && now - windowStart > Double(p.windowSec) {
             eventCount = 0
             windowStart = now
@@ -339,7 +374,7 @@ final class ImpactDetector: ObservableObject {
             playTone()
             let text = Self.timeString()
             let fireDb = db
-            DispQueueMain { [weak self] in
+            DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.triggerCount += 1
                 self.lastTriggerText = text
@@ -348,7 +383,6 @@ final class ImpactDetector: ObservableObject {
             }
         }
 
-        // 背景基线自适应（仅低音模式）：触发期间半速跟随，持续声几秒后被吸收
         if p.mode == .impact {
             if let b = baseline {
                 let th = b + p.sensitivityDb
@@ -364,7 +398,7 @@ final class ImpactDetector: ObservableObject {
 
     private func fftSetupOrCreate() -> FFTSetup? {
         if let s = fftSetup { return s }
-        let s = vDSP_create_fftsetup(12, FFTRadix(kFFTRadix2))  // 2^12 = 4096
+        let s = vDSP_create_fftsetup(12, FFTRadix(kFFTRadix2))
         fftSetup = s
         return s
     }
@@ -482,11 +516,35 @@ final class ImpactDetector: ObservableObject {
         return buffer
     }
 
-    private func clamp01(_ v: Float) -> Float { max(0, min(1, v)) }
-
-    private func DispQueueMain(_ block: @escaping () -> Void) {
-        DispatchQueue.main.async(execute: block)
+    func setCustomAudio(url: URL) throws {
+        let data = try Data(contentsOf: url)
+        let player = try AVAudioPlayer(data: data)
+        player.prepareToPlay()
+        customAudioPlayer = player
+        customAudioDuration = Float(player.duration)
+        customAudioName = url.lastPathComponent
     }
+
+    func clearCustomAudio() {
+        customAudioPlayer = nil
+        customAudioDuration = 0
+        customAudioName = nil
+    }
+
+    func inputDevices() -> [InputDeviceInfo] {
+        guard let inputs = AVAudioSession.sharedInstance().availableInputs else { return [] }
+        return inputs.map { InputDeviceInfo(id: $0.uid, name: $0.portName) }
+    }
+
+    func setPreferredInput(uid: String?) {
+        let session = AVAudioSession.sharedInstance()
+        guard let inputs = session.availableInputs else { return }
+        let target = uid.flatMap { id in inputs.first { $0.uid == id } }
+        try? session.setPreferredInput(target)
+        try? session.setActive(true)
+    }
+
+    private func clamp01(_ v: Float) -> Float { max(0, min(1, v)) }
 
     private static func timeString() -> String {
         let f = DateFormatter()
