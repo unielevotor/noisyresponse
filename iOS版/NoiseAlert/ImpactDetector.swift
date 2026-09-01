@@ -118,7 +118,7 @@ final class ImpactDetector: ObservableObject {
 
     // 判定与防抖常量
     private let domMargin: Float = 4
-    private let hiMargin: Float = 0
+    private let hiMargin: Float = 3   // 低频需明显高于高频，进一步抑制含高音的说话声
     private let peakDrop: Float = 6
     private let eventGap: Float = 0.15
 

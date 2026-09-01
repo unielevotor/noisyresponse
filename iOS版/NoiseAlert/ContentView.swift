@@ -66,7 +66,7 @@ struct ContentView: View {
             if detector.isRunning { runSeconds += 1 }
         }
         .fileImporter(isPresented: $showFileImporter,
-                      allowedContentTypes: [.audio]) { result in
+                      allowedContentTypes: [.audio, .mp3, .wav, .mpeg4Audio]) { result in
             switch result {
             case .success(let url):
                 _ = url.startAccessingSecurityScopedResource()
