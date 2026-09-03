@@ -46,6 +46,7 @@ const DOM_MARGIN = 8;        // 低频需比中频强这么多 dB（抑制说话
 const HI_MARGIN = 6;         // 低频需明显高于高频
 const PEAK_DROP = 8;         // 从事件峰值回落多少 dB 才算一次事件结束（防止抖动重复计数）
 const EVENT_GAP = 0.25;      // 两次计数的最小间隔（秒），合并快速音节
+const MAX_SUSTAIN_SEC = 0.5; // 低频连续高于阈值超过该时长视为持续声（说话/嗡嗡），整组清零
 
 registerProcessor('impact-processor', class extends AudioWorkletProcessor {
   constructor() {
@@ -83,6 +84,8 @@ registerProcessor('impact-processor', class extends AudioWorkletProcessor {
     this.lastFireTime = -1e9;
     this.playingUntil = 0;
     this.blockCount = 0;
+    this.sustainSec = 0;
+    this.sustainSuppress = false;
 
     this.port.onmessage = (e) => {
       const d = e.data;
@@ -175,33 +178,49 @@ registerProcessor('impact-processor', class extends AudioWorkletProcessor {
          && lowDb > active)
       : db >= active;
 
-    if (this.inEvent) {
-      if (lowDb < this.peak - PEAK_DROP) {
-        this.inEvent = false;            // 已回落，结束本次事件，准备下一次
-      } else {
-        this.peak = Math.max(this.peak, lowDb);
+    // 持续声抑制：连续高于阈值超过 MAX_SUSTAIN_SEC 视为说话/嗡嗡声，整组清零
+    if (impactLike) {
+      this.sustainSec += blockSec;
+      if (this.sustainSec > MAX_SUSTAIN_SEC) {
+        if (this.eventCount > 0) this.eventCount = 0;
+        this.windowStart = now;
+        this.sustainSuppress = true;
+        this.inEvent = false;
+        this.peak = -Infinity;
       }
-    } else if (impactLike) {
-      this.inEvent = true;
-      this.peak = lowDb;
-      // 冷却结束且距上次计数足够久，才计入；否则视为同一次或冷却中
-      if (now >= this.lastFireTime + p.cooldownSec
-          && now - this.lastEventTime >= EVENT_GAP) {
-        if (this.eventCount === 0) this.windowStart = now;
-        this.eventCount += 1;
-        this.lastEventTime = now;
-      }
+    } else if (lowDb < active - 4) {
+      this.sustainSec = 0;
+      this.sustainSuppress = false;
     }
 
-    // 触发：T 秒内凑满 N 次才播放
-    if (this.eventCount >= p.confirmCount
-        && now >= this.lastFireTime + p.cooldownSec) {
-      this.lastFireTime = now;
-      this.playingUntil = now + p.toneDurationSec + 0.3;
-      const fired = this.eventCount;
-      this.eventCount = 0;
-      this.windowStart = now;
-      this.port.postMessage({ type: 'trigger', db, mode: p.mode, count: fired });
+    if (!this.sustainSuppress) {
+      if (this.inEvent) {
+        if (lowDb < this.peak - PEAK_DROP) {
+          this.inEvent = false;          // 已回落，结束本次事件
+        } else {
+          this.peak = Math.max(this.peak, lowDb);
+        }
+      } else if (impactLike) {
+        this.inEvent = true;
+        this.peak = lowDb;
+        if (now >= this.lastFireTime + p.cooldownSec
+            && now - this.lastEventTime >= EVENT_GAP) {
+          if (this.eventCount === 0) this.windowStart = now;
+          this.eventCount += 1;
+          this.lastEventTime = now;
+        }
+      }
+
+      // 触发：T 秒内凑满 N 次才播放
+      if (this.eventCount >= p.confirmCount
+          && now >= this.lastFireTime + p.cooldownSec) {
+        this.lastFireTime = now;
+        this.playingUntil = now + p.toneDurationSec + 0.3;
+        const fired = this.eventCount;
+        this.eventCount = 0;
+        this.windowStart = now;
+        this.port.postMessage({ type: 'trigger', db, mode: p.mode, count: fired });
+      }
     }
 
     // 背景基线自适应（仅低音模式）：触发期间半速跟随，持续声几秒后被吸收

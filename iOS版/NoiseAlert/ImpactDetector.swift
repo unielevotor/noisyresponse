@@ -141,6 +141,7 @@ final class ImpactDetector: ObservableObject {
     private let hiMargin: Float = 6      // 低频需明显高于高频
     private let peakDrop: Float = 8      // 从事件峰值回落多少 dB 才算结束
     private let eventGap: Float = 0.25   // 两次计数最小间隔（秒），合并快速音节
+    private let maxSustainSec: Float = 0.5 // 连续高于阈值超过该时长视为持续声，整组清零
 
     // 状态机（仅在 processQueue 上读写）
     private var baseline: Float?
@@ -152,6 +153,8 @@ final class ImpactDetector: ObservableObject {
     private var lastFireTime: Double = -1e9
     private var playingUntil: Double = 0
     private var blockCount = 0
+    private var sustainSec: Float = 0
+    private var sustainSuppress = false
 
     private var interruptionObserver: NSObjectProtocol?
     private var routeObserver: NSObjectProtocol?
@@ -214,6 +217,8 @@ final class ImpactDetector: ObservableObject {
         lastFireTime = -1e9
         playingUntil = 0
         blockCount = 0
+        sustainSec = 0
+        sustainSuppress = false
         triggerCount = 0
         lastTriggerText = nil
         impactCount = 0
@@ -370,39 +375,56 @@ final class ImpactDetector: ObservableObject {
             impactLike = db >= active
         }
 
-        if inEvent {
-            if lowDb < peak - peakDrop {
+        // 持续声抑制：连续高于阈值超过 maxSustainSec 视为说话/嗡嗡声，整组清零
+        if impactLike {
+            sustainSec += blockSec
+            if sustainSec > maxSustainSec {
+                if eventCount > 0 { eventCount = 0 }
+                windowStart = now
+                sustainSuppress = true
                 inEvent = false
-            } else {
-                peak = max(peak, lowDb)
+                peak = -1e9
             }
-        } else if impactLike {
-            inEvent = true
-            peak = lowDb
-            if now >= lastFireTime + Double(p.cooldownSec)
-                && now - lastEventTime >= Double(eventGap) {
-                if eventCount == 0 { windowStart = now }
-                eventCount += 1
-                lastEventTime = now
-            }
+        } else if lowDb < active - 4 {
+            sustainSec = 0
+            sustainSuppress = false
         }
 
-        if eventCount >= p.confirmCount
-            && now >= lastFireTime + Double(p.cooldownSec) {
-            lastFireTime = now
-            playingUntil = now + Double(p.toneDurationSec) + 0.3
-            let fired = eventCount
-            eventCount = 0
-            windowStart = now
-            playTone()
-            let text = Self.timeString()
-            let fireDb = db
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.triggerCount += 1
-                self.lastTriggerText = text
-                self.impactCount = 0
-                onTrigger(text, fireDb, fired)
+        if !sustainSuppress {
+            if inEvent {
+                if lowDb < peak - peakDrop {
+                    inEvent = false
+                } else {
+                    peak = max(peak, lowDb)
+                }
+            } else if impactLike {
+                inEvent = true
+                peak = lowDb
+                if now >= lastFireTime + Double(p.cooldownSec)
+                    && now - lastEventTime >= Double(eventGap) {
+                    if eventCount == 0 { windowStart = now }
+                    eventCount += 1
+                    lastEventTime = now
+                }
+            }
+
+            if eventCount >= p.confirmCount
+                && now >= lastFireTime + Double(p.cooldownSec) {
+                lastFireTime = now
+                playingUntil = now + Double(p.toneDurationSec) + 0.3
+                let fired = eventCount
+                eventCount = 0
+                windowStart = now
+                playTone()
+                let text = Self.timeString()
+                let fireDb = db
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.triggerCount += 1
+                    self.lastTriggerText = text
+                    self.impactCount = 0
+                    onTrigger(text, fireDb, fired)
+                }
             }
         }
 
