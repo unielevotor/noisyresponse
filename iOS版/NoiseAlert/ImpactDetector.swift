@@ -118,6 +118,7 @@ final class ImpactDetector: ObservableObject {
     @Published var lastTriggerText: String?
     @Published var customAudioName: String?
     @Published private(set) var customAudioDuration: Float = 0
+    @Published var activeInputName: String?
 
     private let engine = AVAudioEngine()
     private let playerNode = AVAudioPlayerNode()
@@ -136,10 +137,10 @@ final class ImpactDetector: ObservableObject {
     private var onTrigger: ((String, Float, Int) -> Void)?
 
     // 判定与防抖常量
-    private let domMargin: Float = 4
-    private let hiMargin: Float = 3   // 低频需明显高于高频，进一步抑制含高音的说话声
-    private let peakDrop: Float = 6
-    private let eventGap: Float = 0.15
+    private let domMargin: Float = 8     // 低频需比中频强这么多 dB（抑制说话声）
+    private let hiMargin: Float = 6      // 低频需明显高于高频
+    private let peakDrop: Float = 8      // 从事件峰值回落多少 dB 才算结束
+    private let eventGap: Float = 0.25   // 两次计数最小间隔（秒），合并快速音节
 
     // 状态机（仅在 processQueue 上读写）
     private var baseline: Float?
@@ -182,6 +183,7 @@ final class ImpactDetector: ObservableObject {
 
         try ensureTapAndStart()
         registerObservers()
+        updateActiveInputName()
         isRunning = true
     }
 
@@ -275,6 +277,7 @@ final class ImpactDetector: ObservableObject {
             guard let self, self.isMonitoring else { return }
             try? AVAudioSession.sharedInstance().setActive(true)
             try? self.ensureTapAndStart()
+            self.updateActiveInputName()
         }
 
         engineConfigObserver = center.addObserver(
@@ -564,6 +567,12 @@ final class ImpactDetector: ObservableObject {
         try? session.setActive(true)
         // 切换输入后重新应用输出，避免输出被顺带切换
         applyOutputRoute(outputRoute)
+        updateActiveInputName()
+    }
+
+    private func updateActiveInputName() {
+        let name = AVAudioSession.sharedInstance().currentRoute.inputs.first?.portName
+        DispatchQueue.main.async { [weak self] in self?.activeInputName = name }
     }
 
     // MARK: 输出路由控制

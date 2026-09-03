@@ -7,7 +7,7 @@ struct ContentView: View {
     @State private var params = ParamsBox(DetectorParams())
 
     @AppStorage("mode") private var modeRaw = DetectionMode.impact.rawValue
-    @AppStorage("sensitivity") private var sensitivity = 8.0
+    @AppStorage("sensitivity") private var sensitivity = 12.0
     @AppStorage("threshold") private var threshold = -35.0
     @AppStorage("confirmCount") private var confirmCount = 3.0
     @AppStorage("windowSec") private var windowSec = 4.0
@@ -110,6 +110,8 @@ struct ContentView: View {
                 .pickerStyle(.menu)
                 Button("刷新") { refreshInputs() }
             }
+            Text("当前输入：\(detector.activeInputName ?? "—")")
+                .font(.caption).foregroundStyle(.secondary)
 
             HStack {
                 Picker("输出设备（音箱）", selection: $outputRouteRaw) {

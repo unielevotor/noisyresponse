@@ -42,10 +42,10 @@ function fft(re, im) {
 const clamp01 = (v) => Math.max(0, Math.min(1, v));
 
 // 判定与防抖参数
-const DOM_MARGIN = 4;        // 低频需比中频强这么多 dB（中频更强通常是说话声）
-const HI_MARGIN = 0;         // 低频需不低于高频（抑制尖锐宽带声）
-const PEAK_DROP = 6;         // 从事件峰值回落多少 dB 才算一次事件结束（防止抖动重复计数）
-const EVENT_GAP = 0.15;      // 两次计数的最小间隔（秒），抑制语音音节、稳定累积
+const DOM_MARGIN = 8;        // 低频需比中频强这么多 dB（抑制说话声）
+const HI_MARGIN = 6;         // 低频需明显高于高频
+const PEAK_DROP = 8;         // 从事件峰值回落多少 dB 才算一次事件结束（防止抖动重复计数）
+const EVENT_GAP = 0.25;      // 两次计数的最小间隔（秒），合并快速音节
 
 registerProcessor('impact-processor', class extends AudioWorkletProcessor {
   constructor() {
